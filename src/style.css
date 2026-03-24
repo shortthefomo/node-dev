@@ -100,6 +100,54 @@ h1 {
   word-break: break-word;
 }
 
+.legend {
+  margin-top: 0.9rem;
+  padding: 0.6rem 0.65rem;
+  border-radius: 0.55rem;
+  border: 1px solid rgba(120, 165, 255, 0.24);
+  background: rgba(9, 22, 44, 0.45);
+}
+
+.legend-title {
+  margin: 0;
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #9fc4f5;
+}
+
+.legend-list {
+  margin: 0.5rem 0 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.legend-item {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.legend-swatch {
+  width: 0.72rem;
+  height: 0.72rem;
+  border-radius: 999px;
+  box-shadow: 0 0 0 1px rgba(225, 235, 255, 0.35);
+}
+
+.legend-version {
+  font-size: 0.8rem;
+  color: #e8f2ff;
+}
+
+.legend-count {
+  font-size: 0.78rem;
+  color: #b6d2f8;
+}
+
 canvas {
   display: block;
 }

@@ -9,6 +9,7 @@ const globeContainer = ref(null)
 const nodeCount = ref(0)
 const lastUpdated = ref('—')
 const status = ref('Loading XRPL nodes…')
+const versionLegend = ref([])
 
 let renderer
 let scene
@@ -18,10 +19,74 @@ let globeGroup
 let globeMesh
 let animationFrameId
 let nodePoints
+let nodeOutlinePoints
 let landPoints
 let resizeHandler
 
 const GLOBE_RADIUS = 14
+const LAND_ALTITUDE = 0.06
+const NODE_ALTITUDE = 0.2
+const VERSION_PALETTE = [
+  '#ff3b30',
+  '#ff6b00',
+  '#00b5ff',
+  '#6a5cff',
+  '#00c875',
+  '#ff2d9a',
+  '#8f6bff',
+  '#3d7dff'
+]
+
+function normalizeVersion(version) {
+  if (!version || typeof version !== 'string') {
+    return 'Unknown'
+  }
+
+  const trimmed = version.trim()
+  if (!trimmed) {
+    return 'Unknown'
+  }
+
+  const semver = trimmed.match(/\d+\.\d+\.\d+/)
+  if (semver) {
+    return `v${semver[0]}`
+  }
+
+  return trimmed.slice(0, 28)
+}
+
+function buildVersionColorMap(nodes) {
+  const counts = new Map()
+
+  for (const node of nodes) {
+    const version = normalizeVersion(node.version)
+    counts.set(version, (counts.get(version) ?? 0) + 1)
+  }
+
+  const ordered = [...counts.entries()].sort((a, b) => b[1] - a[1])
+  const colorMap = new Map()
+  const legend = []
+  const maxLegendEntries = 8
+
+  ordered.slice(0, maxLegendEntries).forEach(([version, count], index) => {
+    const colorHex = VERSION_PALETTE[index % VERSION_PALETTE.length]
+    colorMap.set(version, new THREE.Color(colorHex))
+    legend.push({ version, count, color: colorHex })
+  })
+
+  if (ordered.length > maxLegendEntries) {
+    const otherCount = ordered.slice(maxLegendEntries).reduce((sum, [, count]) => sum + count, 0)
+    const otherColor = '#d0d7e2'
+    legend.push({ version: 'Other', count: otherCount, color: otherColor })
+
+    for (const [version] of ordered.slice(maxLegendEntries)) {
+      colorMap.set(version, new THREE.Color(otherColor))
+    }
+  }
+
+  versionLegend.value = legend
+  return colorMap
+}
 
 function hashString(input) {
   let hash = 0
@@ -88,7 +153,7 @@ async function createLandLayer() {
     return
   }
 
-  const hexasphere = new Hexasphere(GLOBE_RADIUS + 0.06, 58, 0.82)
+  const hexasphere = new Hexasphere(GLOBE_RADIUS + LAND_ALTITUDE, 58, 0.82)
   const landGeometries = []
 
   for (const tile of hexasphere.tiles) {
@@ -132,6 +197,8 @@ async function createLandLayer() {
       opacity: 0.9
     })
   )
+
+  landPoints.renderOrder = 2
 
   globeGroup.add(landPoints)
 }
@@ -223,18 +290,24 @@ async function fetchCountryFallback(countryCodes) {
 }
 
 function clearNodePoints() {
-  if (!nodePoints) {
-    return
+  if (nodePoints) {
+    globeGroup.remove(nodePoints)
+    nodePoints.geometry.dispose()
+    nodePoints.material.dispose()
+    nodePoints = null
   }
 
-  globeGroup.remove(nodePoints)
-  nodePoints.geometry.dispose()
-  nodePoints.material.dispose()
-  nodePoints = null
+  if (nodeOutlinePoints) {
+    globeGroup.remove(nodeOutlinePoints)
+    nodeOutlinePoints.geometry.dispose()
+    nodeOutlinePoints.material.dispose()
+    nodeOutlinePoints = null
+  }
 }
 
 function plotNodes(nodes, ipCoords, countryCoords) {
   clearNodePoints()
+  const versionColors = buildVersionColorMap(nodes)
 
   // Each node gets its IP coord, or falls back to country centroid with jitter
   const plotList = []
@@ -263,15 +336,14 @@ function plotNodes(nodes, ipCoords, countryCoords) {
   const color = new THREE.Color()
 
   plotList.forEach(({ node, lat, lon }, index) => {
-    const position = latLonToVector3(lat, lon, GLOBE_RADIUS + 0.95)
+    const position = latLonToVector3(lat, lon, GLOBE_RADIUS + NODE_ALTITUDE)
 
     positions[index * 3] = position.x
     positions[index * 3 + 1] = position.y
     positions[index * 3 + 2] = position.z
 
-    const uptime = Number(node.uptime ?? 0)
-    const t = Math.min(1, uptime / 1_000_000)
-    color.setRGB(0.12 + t * 0.22, 0.85 + t * 0.15, 1)
+    const version = normalizeVersion(node.version)
+    color.copy(versionColors.get(version) ?? new THREE.Color('#d0d7e2'))
 
     colors[index * 3] = color.r
     colors[index * 3 + 1] = color.g
@@ -282,17 +354,35 @@ function plotNodes(nodes, ipCoords, countryCoords) {
   geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3))
   geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3))
 
+  const outlineGeometry = new THREE.BufferGeometry()
+  outlineGeometry.setAttribute('position', new THREE.BufferAttribute(positions.slice(), 3))
+
+  const outlineMaterial = new THREE.PointsMaterial({
+    size: 0.68,
+    sizeAttenuation: true,
+    color: 0x031022,
+    transparent: true,
+    opacity: 0.98,
+    depthWrite: false,
+    blending: THREE.NormalBlending
+  })
+
+  nodeOutlinePoints = new THREE.Points(outlineGeometry, outlineMaterial)
+  nodeOutlinePoints.renderOrder = 10
+  globeGroup.add(nodeOutlinePoints)
+
   const material = new THREE.PointsMaterial({
-    size: 0.34,
+    size: 0.46,
     sizeAttenuation: true,
     vertexColors: true,
     transparent: true,
     opacity: 1,
-    blending: THREE.AdditiveBlending,
+    blending: THREE.NormalBlending,
     depthWrite: false
   })
 
   nodePoints = new THREE.Points(geometry, material)
+  nodePoints.renderOrder = 11
   globeGroup.add(nodePoints)
   nodeCount.value = plotList.length
 }
@@ -445,8 +535,13 @@ function animate() {
   globeGroup.rotation.y += 0.0008
 
   if (nodePoints) {
-    const pulse = 0.34 + Math.sin(Date.now() * 0.003) * 0.05
+    const pulse = 0.46 + Math.sin(Date.now() * 0.003) * 0.06
     nodePoints.material.size = pulse
+  }
+
+  if (nodeOutlinePoints) {
+    const pulseOutline = 0.68 + Math.sin(Date.now() * 0.003) * 0.06
+    nodeOutlinePoints.material.size = pulseOutline
   }
 
   controls.update()
@@ -515,6 +610,17 @@ onBeforeUnmount(() => {
           <span>Last Updated</span>
           <strong>{{ lastUpdated }}</strong>
         </div>
+      </div>
+
+      <div v-if="versionLegend.length" class="legend">
+        <p class="legend-title">Node Versions</p>
+        <ul class="legend-list">
+          <li v-for="entry in versionLegend" :key="entry.version" class="legend-item">
+            <span class="legend-swatch" :style="{ backgroundColor: entry.color }" />
+            <span class="legend-version">{{ entry.version }}</span>
+            <span class="legend-count">{{ entry.count }}</span>
+          </li>
+        </ul>
       </div>
     </section>
 
