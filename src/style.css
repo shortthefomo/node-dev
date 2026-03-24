@@ -1,0 +1,118 @@
+:root {
+  font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  color: #e7f1ff;
+  background: #020611;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at 15% 15%, rgba(46, 126, 255, 0.25), transparent 42%),
+    radial-gradient(circle at 85% 85%, rgba(0, 163, 255, 0.15), transparent 48%),
+    #020611;
+}
+
+#app {
+  width: 100%;
+  min-height: 100vh;
+}
+
+.app {
+  position: relative;
+  width: 100%;
+  height: 100vh;
+  overflow: hidden;
+}
+
+.globe-container {
+  width: 100%;
+  height: 100%;
+}
+
+.hud {
+  position: absolute;
+  top: 1.25rem;
+  left: 1.25rem;
+  z-index: 10;
+  width: min(33rem, calc(100% - 2.5rem));
+  padding: 1.1rem 1.2rem;
+  border: 1px solid rgba(122, 170, 255, 0.35);
+  border-radius: 0.9rem;
+  background: rgba(4, 13, 29, 0.6);
+  backdrop-filter: blur(6px);
+}
+
+.eyebrow {
+  margin: 0;
+  color: #73adff;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+h1 {
+  margin: 0.35rem 0;
+  font-size: clamp(1.5rem, 2.6vw, 2.2rem);
+  line-height: 1.1;
+}
+
+.status {
+  margin: 0;
+  color: #acd0ff;
+  font-size: 0.95rem;
+}
+
+.meta {
+  margin-top: 0.9rem;
+  display: grid;
+  gap: 0.55rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.meta-card {
+  padding: 0.55rem 0.65rem;
+  border-radius: 0.55rem;
+  border: 1px solid rgba(120, 165, 255, 0.28);
+  background: rgba(9, 22, 44, 0.55);
+}
+
+.meta-card span {
+  display: block;
+  font-size: 0.72rem;
+  color: #98bff1;
+}
+
+.meta-card strong {
+  display: block;
+  margin-top: 0.2rem;
+  font-size: 0.92rem;
+  color: #f2f8ff;
+  word-break: break-word;
+}
+
+canvas {
+  display: block;
+}
+
+@media (max-width: 720px) {
+  .hud {
+    top: 0.75rem;
+    left: 0.75rem;
+    width: calc(100% - 1.5rem);
+    padding: 0.9rem;
+  }
+
+  .meta {
+    grid-template-columns: 1fr;
+  }
+}
