@@ -163,33 +163,60 @@ async function fetchNodes() {
   throw new Error('Unable to fetch XRPSCAN nodes')
 }
 
-async function fetchCountryCoordinates(countryCodes) {
-  if (countryCodes.length === 0) {
-    return new Map()
+function isPublicIp(ip) {
+  if (!ip || typeof ip !== 'string') return false
+  const parts = ip.split('.').map(Number)
+  if (parts.length !== 4 || parts.some((p) => isNaN(p))) return false
+  // Filter private/loopback/link-local ranges
+  if (parts[0] === 10) return false
+  if (parts[0] === 127) return false
+  if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) return false
+  if (parts[0] === 192 && parts[1] === 168) return false
+  if (parts[0] === 169 && parts[1] === 254) return false
+  return true
+}
+
+async function geocodeIps(ips) {
+  // ip-api.com/batch: free, up to 100 per request, HTTP only
+  const coords = new Map()
+  const BATCH = 100
+
+  for (let i = 0; i < ips.length; i += BATCH) {
+    const batch = ips.slice(i, i + BATCH).map((ip) => ({ query: ip, fields: 'query,lat,lon,status' }))
+    try {
+      const response = await fetch('http://ip-api.com/batch?fields=query,lat,lon,status', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(batch)
+      })
+      if (!response.ok) continue
+      const results = await response.json()
+      for (const r of results) {
+        if (r.status === 'success') coords.set(r.query, { lat: r.lat, lon: r.lon })
+      }
+    } catch {
+      continue
+    }
   }
 
+  return coords
+}
+
+async function fetchCountryFallback(countryCodes) {
+  if (countryCodes.length === 0) return new Map()
   try {
     const response = await fetch(
       `https://restcountries.com/v3.1/alpha?codes=${countryCodes.join(',')}&fields=cca2,latlng`
     )
-
-    if (!response.ok) {
-      throw new Error('Country lookup failed')
-    }
-
+    if (!response.ok) return new Map()
     const countries = await response.json()
-    const coordinates = new Map()
-
+    const coords = new Map()
     for (const country of countries) {
-      if (!country?.cca2 || !Array.isArray(country?.latlng)) {
-        continue
-      }
-
+      if (!country?.cca2 || !Array.isArray(country?.latlng)) continue
       const [lat, lon] = country.latlng
-      coordinates.set(country.cca2.toUpperCase(), { lat, lon })
+      coords.set(country.cca2.toUpperCase(), { lat, lon })
     }
-
-    return coordinates
+    return coords
   } catch {
     return new Map()
   }
@@ -206,28 +233,36 @@ function clearNodePoints() {
   nodePoints = null
 }
 
-function plotNodes(nodes, countryCoords) {
+function plotNodes(nodes, ipCoords, countryCoords) {
   clearNodePoints()
 
-  const validNodes = nodes.filter((node) => {
-    const country = node.country?.toUpperCase()
-    return Boolean(country && countryCoords.has(country))
-  })
+  // Each node gets its IP coord, or falls back to country centroid with jitter
+  const plotList = []
+  for (const node of nodes) {
+    const ip = node.ip
+    if (ipCoords.has(ip)) {
+      plotList.push({ node, lat: ipCoords.get(ip).lat, lon: ipCoords.get(ip).lon })
+    } else {
+      const country = node.country?.toUpperCase()
+      if (country && countryCoords.has(country)) {
+        const coord = countryCoords.get(country)
+        const seed = hashString(node.public_key ?? `${country}`)
+        const jitterLat = ((seed % 1000) / 1000 - 0.5) * 5
+        const jitterLon = (((Math.floor(seed / 1000) % 1000) / 1000) - 0.5) * 8
+        plotList.push({
+          node,
+          lat: Math.max(-85, Math.min(85, coord.lat + jitterLat)),
+          lon: coord.lon + jitterLon
+        })
+      }
+    }
+  }
 
-  const positions = new Float32Array(validNodes.length * 3)
-  const colors = new Float32Array(validNodes.length * 3)
+  const positions = new Float32Array(plotList.length * 3)
+  const colors = new Float32Array(plotList.length * 3)
   const color = new THREE.Color()
 
-  validNodes.forEach((node, index) => {
-    const country = node.country.toUpperCase()
-    const coord = countryCoords.get(country)
-    const seed = hashString(node.public_key ?? `${country}-${index}`)
-
-    const jitterLat = ((seed % 1000) / 1000 - 0.5) * 5
-    const jitterLon = (((Math.floor(seed / 1000) % 1000) / 1000) - 0.5) * 8
-
-    const lat = Math.max(-85, Math.min(85, coord.lat + jitterLat))
-    const lon = coord.lon + jitterLon
+  plotList.forEach(({ node, lat, lon }, index) => {
     const position = latLonToVector3(lat, lon, GLOBE_RADIUS + 0.95)
 
     positions[index * 3] = position.x
@@ -236,7 +271,7 @@ function plotNodes(nodes, countryCoords) {
 
     const uptime = Number(node.uptime ?? 0)
     const t = Math.min(1, uptime / 1_000_000)
-    color.setRGB(0.12 + t * 0.22, 0.92, 1)
+    color.setRGB(0.12 + t * 0.22, 0.85 + t * 0.15, 1)
 
     colors[index * 3] = color.r
     colors[index * 3 + 1] = color.g
@@ -259,7 +294,7 @@ function plotNodes(nodes, countryCoords) {
 
   nodePoints = new THREE.Points(geometry, material)
   globeGroup.add(nodePoints)
-  nodeCount.value = validNodes.length
+  nodeCount.value = plotList.length
 }
 
 async function loadAndRenderNodes() {
@@ -277,10 +312,18 @@ async function loadAndRenderNodes() {
     }
 
     const dedupedNodes = [...uniqueNodes.values()]
-    const countries = [...new Set(dedupedNodes.map((node) => node.country?.toUpperCase()).filter(Boolean))]
-    const countryCoords = await fetchCountryCoordinates(countries)
 
-    plotNodes(dedupedNodes, countryCoords)
+    // Geocode by IP first
+    status.value = 'Geolocating nodes…'
+    const publicIps = [...new Set(dedupedNodes.map((n) => n.ip).filter(isPublicIp))]
+    const ipCoords = await geocodeIps(publicIps)
+
+    // Country fallback for nodes whose IP didn't resolve
+    const needsFallback = dedupedNodes.filter((n) => !ipCoords.has(n.ip))
+    const fallbackCountries = [...new Set(needsFallback.map((n) => n.country?.toUpperCase()).filter(Boolean))]
+    const countryCoords = await fetchCountryFallback(fallbackCountries)
+
+    plotNodes(dedupedNodes, ipCoords, countryCoords)
     status.value = 'Live XRPL network nodes'
     lastUpdated.value = new Date().toLocaleString()
   } catch {
